@@ -10,9 +10,9 @@ PYTHON_BIN="${PYTHON:-python3}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-CONFIG_TEMPLATE="${REPO_ROOT}/packaging/config/govee-bridge.toml"
-SYSTEM_UNIT="${REPO_ROOT}/packaging/systemd/govee-bridge.service"
-USER_UNIT="${REPO_ROOT}/packaging/systemd/govee-bridge-user.service"
+CONFIG_TEMPLATE="${REPO_ROOT}/packaging/config/dmx-bridge.toml"
+SYSTEM_UNIT="${REPO_ROOT}/packaging/systemd/dmx-lan-bridge.service"
+USER_UNIT="${REPO_ROOT}/packaging/systemd/dmx-lan-bridge-user.service"
 
 log() {
   echo "[install] $*"
@@ -143,14 +143,18 @@ install_system() {
   log "Ensuring data directory /var/lib/dmx-bridge..."
   install -d -o dmx-bridge -g dmx-bridge -m 750 /var/lib/dmx-bridge
 
+  # Prevent the pre-2.0 unit from running alongside the renamed service.
+  systemctl disable --now dmx-bridge.service >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/dmx-bridge.service
+
   log "Installing systemd unit..."
-  install -m 644 "${SYSTEM_UNIT}" /etc/systemd/system/dmx-bridge.service
+  install -m 644 "${SYSTEM_UNIT}" /etc/systemd/system/dmx-lan-bridge.service
   systemctl daemon-reload
 
   if [[ "${START_SERVICE}" -eq 1 ]]; then
-    systemctl enable --now dmx-bridge.service
+    systemctl enable --now dmx-lan-bridge.service
   else
-    systemctl enable dmx-bridge.service
+    systemctl enable dmx-lan-bridge.service
     log "Service installed but not started (--no-start)."
   fi
 
@@ -180,14 +184,18 @@ install_user() {
     log "Existing user config ${config_path} preserved."
   fi
 
+  # The old user unit has a different name and would otherwise remain active.
+  systemctl --user disable --now dmx-bridge-user.service >/dev/null 2>&1 || true
+  rm -f "${unit_dir}/dmx-bridge-user.service"
+
   log "Installing user systemd unit..."
-  install -m 644 "${USER_UNIT}" "${unit_dir}/dmx-bridge-user.service"
+  install -m 644 "${USER_UNIT}" "${unit_dir}/dmx-lan-bridge.service"
   systemctl --user daemon-reload
 
   if [[ "${START_SERVICE}" -eq 1 ]]; then
-    systemctl --user enable --now dmx-bridge-user.service
+    systemctl --user enable --now dmx-lan-bridge.service
   else
-    systemctl --user enable dmx-bridge-user.service
+    systemctl --user enable dmx-lan-bridge.service
     log "User service installed but not started (--no-start)."
   fi
 
@@ -199,9 +207,9 @@ uninstall_system() {
   require_root
   require_command systemctl
 
-  systemctl stop dmx-bridge.service 2>/dev/null || true
-  systemctl disable dmx-bridge.service 2>/dev/null || true
-  rm -f /etc/systemd/system/dmx-bridge.service
+  systemctl stop dmx-lan-bridge.service 2>/dev/null || true
+  systemctl disable dmx-lan-bridge.service 2>/dev/null || true
+  rm -f /etc/systemd/system/dmx-lan-bridge.service
   systemctl daemon-reload
 
   "${PYTHON_BIN}" -m pip uninstall --break-system-packages -y dmx-lan-bridge || true
@@ -211,9 +219,9 @@ uninstall_system() {
 uninstall_user() {
   require_command systemctl
 
-  systemctl --user stop dmx-bridge-user.service 2>/dev/null || true
-  systemctl --user disable dmx-bridge-user.service 2>/dev/null || true
-  rm -f "${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user/dmx-bridge-user.service"
+  systemctl --user stop dmx-lan-bridge.service 2>/dev/null || true
+  systemctl --user disable dmx-lan-bridge.service 2>/dev/null || true
+  rm -f "${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user/dmx-lan-bridge.service"
   systemctl --user daemon-reload
 
   "${PYTHON_BIN}" -m pip uninstall -y dmx-lan-bridge || true

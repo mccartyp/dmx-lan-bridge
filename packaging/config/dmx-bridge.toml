@@ -9,7 +9,7 @@
 #   User service: ~/.config/dmx-bridge/config.toml
 #
 # Reload after changes:
-#   sudo systemctl reload dmx-bridge.service
+#   sudo systemctl reload dmx-lan-bridge.service
 #   OR: POST /reload via API
 # ==============================================================================
 

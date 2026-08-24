@@ -88,6 +88,10 @@ case "$1" in
             fi
         done
 
+        # Retire the old unit name before enabling its replacement. This also
+        # removes its enablement symlinks during upgrades.
+        systemctl disable --now dmx-bridge.service >/dev/null 2>&1 || true
+
         # Reload systemd daemon
         systemctl daemon-reload || true
 

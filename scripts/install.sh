@@ -143,6 +143,10 @@ install_system() {
   log "Ensuring data directory /var/lib/dmx-bridge..."
   install -d -o dmx-bridge -g dmx-bridge -m 750 /var/lib/dmx-bridge
 
+  # Prevent the pre-2.0 unit from running alongside the renamed service.
+  systemctl disable --now dmx-bridge.service >/dev/null 2>&1 || true
+  rm -f /etc/systemd/system/dmx-bridge.service
+
   log "Installing systemd unit..."
   install -m 644 "${SYSTEM_UNIT}" /etc/systemd/system/dmx-lan-bridge.service
   systemctl daemon-reload
@@ -179,6 +183,10 @@ install_user() {
   else
     log "Existing user config ${config_path} preserved."
   fi
+
+  # The old user unit has a different name and would otherwise remain active.
+  systemctl --user disable --now dmx-bridge-user.service >/dev/null 2>&1 || true
+  rm -f "${unit_dir}/dmx-bridge-user.service"
 
   log "Installing user systemd unit..."
   install -m 644 "${USER_UNIT}" "${unit_dir}/dmx-lan-bridge.service"

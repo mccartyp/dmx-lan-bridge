@@ -227,10 +227,10 @@ jobs:
         echo "Debug: Checking for service file on disk..."
 
         # Check if service file exists (works reliably in all environments)
-        if [ -f /lib/systemd/system/dmx-bridge.service ] || [ -f /usr/lib/systemd/system/dmx-bridge.service ]; then
+        if [ -f /lib/systemd/system/dmx-lan-bridge.service ] || [ -f /usr/lib/systemd/system/dmx-lan-bridge.service ]; then
           echo "✓ Systemd service file installed"
-          ls -la /lib/systemd/system/dmx-bridge.service 2>/dev/null || true
-          ls -la /usr/lib/systemd/system/dmx-bridge.service 2>/dev/null || true
+          ls -la /lib/systemd/system/dmx-lan-bridge.service 2>/dev/null || true
+          ls -la /usr/lib/systemd/system/dmx-lan-bridge.service 2>/dev/null || true
         else
           echo "ERROR: Systemd service file not found"
           echo "Searched locations:"
@@ -303,11 +303,11 @@ jobs:
 
         # Service should already be started by postinst
         # Check if service is active
-        if sudo systemctl is-active --quiet dmx-bridge.service; then
+        if sudo systemctl is-active --quiet dmx-lan-bridge.service; then
           echo "✓ Service is running"
 
           # Check service status
-          sudo systemctl status dmx-bridge.service --no-pager -l || true
+          sudo systemctl status dmx-lan-bridge.service --no-pager -l || true
 
           # Give it a moment to initialize
           sleep 3
@@ -318,31 +318,31 @@ jobs:
           else
             echo "⚠ API not responding (this may be normal if no devices configured)"
             echo "Service logs:"
-            sudo journalctl -u dmx-bridge.service --no-pager -n 50
+            sudo journalctl -u dmx-lan-bridge.service --no-pager -n 50
           fi
 
           # Test restart
           echo ""
           echo "Testing service restart..."
-          sudo systemctl restart dmx-bridge.service
+          sudo systemctl restart dmx-lan-bridge.service
           sleep 2
 
-          if sudo systemctl is-active --quiet dmx-bridge.service; then
+          if sudo systemctl is-active --quiet dmx-lan-bridge.service; then
             echo "✓ Service restart successful"
           else
             echo "ERROR: Service failed to restart"
-            sudo systemctl status dmx-bridge.service --no-pager -l || true
+            sudo systemctl status dmx-lan-bridge.service --no-pager -l || true
             exit 1
           fi
 
           # Stop service for cleanup
-          sudo systemctl stop dmx-bridge.service
+          sudo systemctl stop dmx-lan-bridge.service
         else
           echo "ERROR: Service is not active"
-          sudo systemctl status dmx-bridge.service --no-pager -l || true
+          sudo systemctl status dmx-lan-bridge.service --no-pager -l || true
           echo ""
           echo "Service logs:"
-          sudo journalctl -u dmx-bridge.service --no-pager -n 100
+          sudo journalctl -u dmx-lan-bridge.service --no-pager -n 100
           exit 1
         fi
 

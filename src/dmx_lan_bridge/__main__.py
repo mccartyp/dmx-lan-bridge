@@ -417,6 +417,7 @@ async def _api_loop(
         reload_callback=reload_callback,
         log_buffer=log_buffer,
         event_bus=event_bus,
+        sender_provider=(lambda: services.sender) if services is not None else None,
     )
     if services is not None:
         services.api = service

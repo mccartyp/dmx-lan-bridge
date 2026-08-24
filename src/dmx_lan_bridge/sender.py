@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import socket
 import contextlib
 import time
@@ -12,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional
 
 from .config import Config
-from .devices import DeviceInfo, DeviceStore, PendingState
+from .devices import DeviceInfo, DeviceStateUpdate, DeviceStore, PendingState
 from .health import BackoffPolicy, HealthMonitor
 from .logging import get_logger
 from .metrics import (
@@ -90,6 +91,7 @@ class DeviceSenderService:
         self.store = store
         self.logger = get_logger("artnet.sender")
         self._stop_event = asyncio.Event()
+        self._wake_event = asyncio.Event()
         self._poll_task: Optional[asyncio.Task[None]] = None
         self._device_tasks: Dict[str, asyncio.Task[None]] = {}
         self._dry_run = config.dry_run
@@ -107,18 +109,101 @@ class DeviceSenderService:
         self._rate_last_refill = time.perf_counter()
         self._rate_lock = asyncio.Lock()
         set_rate_limit_tokens(self._rate_tokens)
+        self._enqueued = 0
+        self._dequeued = 0
+        self._sent = 0
+        self._failed = 0
 
     async def start(self) -> None:
+        if self.is_running():
+            return
         self._stop_event.clear()
+        self._wake_event.clear()
         await self.store.refresh_metrics()
         self._rate_tokens = float(self.config.rate_limit_burst)
         self._rate_last_refill = time.perf_counter()
         set_rate_limit_tokens(self._rate_tokens)
         self._poll_task = asyncio.create_task(self._poll_loop())
+        self._poll_task.add_done_callback(self._poll_task_done)
         if self._dry_run:
             self.logger.info("Device sender service started in dry-run mode; payloads will not be sent.")
         else:
             self.logger.info("Device sender service started")
+
+    def _poll_task_done(self, task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            self.logger.error("Sender worker failed", exc_info=(type(exc), exc, exc.__traceback__))
+            asyncio.create_task(self._health.record_failure("sender", exc))
+
+    def is_running(self) -> bool:
+        return self._poll_task is not None and not self._poll_task.done()
+
+    async def health_details(self) -> Mapping[str, Any]:
+        monitor_state = dict((await self._health.snapshot()).get("sender", {}))
+        reason = None
+        if self._poll_task is None:
+            reason = "sender worker was never started"
+        elif self._poll_task.cancelled():
+            reason = "sender worker was cancelled"
+        elif self._poll_task.done():
+            exc = self._poll_task.exception()
+            reason = str(exc) if exc else "sender worker stopped"
+        try:
+            queue_depth = await self.store.pending_state_count()
+        except Exception as exc:
+            queue_depth = None
+            reason = reason or f"queue inspection failed: {exc}"
+        monitor_status = str(monitor_state.get("status", "ok"))
+        details = {
+            **monitor_state,
+            "status": monitor_status if reason is None else "failed",
+            "reason": reason,
+            "queue_depth": queue_depth,
+            "enqueued": self._enqueued,
+            "dequeued": self._dequeued,
+            "sent": self._sent,
+            "failed": self._failed,
+            "active_device_workers": sum(not task.done() for task in self._device_tasks.values()),
+            "queue_name": "device-state-db",
+            "queue_id": id(self.store),
+        }
+        if reason is None and monitor_state.get("last_error"):
+            details["reason"] = monitor_state["last_error"]
+        return details
+
+    async def enqueue(self, update: DeviceStateUpdate) -> None:
+        if not self.is_running():
+            raise RuntimeError("sender worker is not running")
+        device = await self.store.device_info(update.device_id)
+        if device is None:
+            raise ValueError(f"device {update.device_id!r} is unavailable")
+        self.logger.debug(
+            "Command about to be queued",
+            extra={
+                "device_id": update.device_id,
+                "protocol": device.protocol,
+                "command_type": update.context_id,
+                "payload": update.payload,
+                "queue_name": "device-state-db",
+                "queue_id": id(self.store),
+            },
+        )
+        await self.store.enqueue_state(update)
+        self._enqueued += 1
+        self._wake_event.set()
+        self.logger.debug(
+            "Command successfully queued",
+            extra={
+                "device_id": update.device_id,
+                "protocol": device.protocol,
+                "queue_depth": await self.store.pending_state_count(),
+                "queue_name": "device-state-db",
+                "queue_id": id(self.store),
+            },
+        )
 
     async def stop(self) -> None:
         self._stop_event.set()
@@ -128,19 +213,17 @@ class DeviceSenderService:
         for task in tasks:
             task.cancel()
         if tasks:
-            with contextlib.suppress(asyncio.CancelledError):
-                await asyncio.gather(*tasks)
+            await asyncio.gather(*tasks, return_exceptions=True)
         self._poll_task = None
         self._device_tasks.clear()
         self.logger.info("Device sender service stopped")
 
     async def _poll_loop(self) -> None:
         while not self._stop_event.is_set():
+            self._wake_event.clear()
             await self._ensure_workers()
             try:
-                await asyncio.wait_for(
-                    self._stop_event.wait(), timeout=self.config.device_queue_poll_interval
-                )
+                await asyncio.wait_for(self._wake_event.wait(), timeout=self.config.device_queue_poll_interval)
             except asyncio.TimeoutError:
                 continue
 
@@ -157,17 +240,24 @@ class DeviceSenderService:
             if task.cancelled():
                 continue
             if task.exception():
+                exc = task.exception()
                 self.logger.error(
                     "Device send task failed",
                     extra={"device_id": device_id},
-                    exc_info=task.exception(),
+                    exc_info=(type(exc), exc, exc.__traceback__),
                 )
+                self._failed += 1
+                await self._health.record_failure("sender", exc)
 
     async def _run_device_queue(self, device_id: str) -> None:
         rate_delay = 0.0
         if self.config.device_max_send_rate > 0:
             rate_delay = 1.0 / self.config.device_max_send_rate
         while not self._stop_event.is_set():
+            self.logger.debug(
+                "Sender waiting for command",
+                extra={"device_id": device_id, "queue_name": "device-state-db", "queue_id": id(self.store)},
+            )
             state = await self.store.next_state(device_id)
             if state is None:
                 try:
@@ -177,7 +267,23 @@ class DeviceSenderService:
                 except asyncio.TimeoutError:
                     continue
                 continue
-            await self._process_state(state)
+            self._dequeued += 1
+            self.logger.debug(
+                "Sender dequeued command",
+                extra={"device_id": device_id, "context_id": state.context_id, "payload": state.payload, "queue_name": "device-state-db", "queue_id": id(self.store)},
+            )
+            try:
+                await self._process_state(state)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._failed += 1
+                self.logger.exception(
+                    "Sender command processing failed; worker will continue",
+                    extra={"device_id": device_id, "state_id": state.id, "context_id": state.context_id},
+                )
+                await self._health.record_failure("sender", exc)
+                await self._sleep_with_stop(self._backoff.delay(1))
             if rate_delay:
                 try:
                     await asyncio.wait_for(self._stop_event.wait(), timeout=rate_delay)
@@ -237,10 +343,10 @@ class DeviceSenderService:
             _finalize("dead_letter")
             return
 
-        if device.failure_count == 0 and device.last_payload_hash == payload_hash:
+        if state.context_id != "command" and device.failure_count == 0 and device.last_payload_hash == payload_hash:
             self.logger.debug(
                 "Dropping duplicate payload",
-                extra=context_extra,
+                extra={**context_extra, "reason": "same payload was previously delivered", "payload": state.payload},
             )
             await self.store.delete_state(state.id)
             return
@@ -255,7 +361,28 @@ class DeviceSenderService:
             # Text payload - encode to UTF-8 (Govee JSON)
             payload = state.payload.encode("utf-8")
 
+        if target.protocol.lower() == "govee":
+            try:
+                document = json.loads(payload)
+                message = document["msg"]
+                if not isinstance(message.get("cmd"), str) or not isinstance(message.get("data"), Mapping):
+                    raise ValueError("msg.cmd and msg.data are required")
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                self.logger.exception(
+                    "Invalid Govee UDP payload; moving command to dead letter",
+                    extra={**context_extra, "payload": state.payload, "protocol": target.protocol},
+                )
+                await self.store.quarantine_state(
+                    state, payload_hash, reason="invalid_payload", details=str(exc)
+                )
+                await self._health.record_failure("sender", exc)
+                self._failed += 1
+                _finalize("dead_letter")
+                return
+
         transport_label = target.transport
+        self.logger.debug("Protocol sender selected", extra={**context_extra, "protocol": target.protocol, "transport": target.transport})
+        self.logger.debug("Destination device selected", extra={**context_extra, "device_ip": target.ip, "destination_port": target.port, "protocol": target.protocol})
         try:
             success = await self._send_with_retries(target, payload, payload_hash, state.context_id)
         except Exception as exc:  # pragma: no cover - defensive
@@ -276,8 +403,10 @@ class DeviceSenderService:
             await self.store.record_send_success(state.device_id, payload_hash)
             await self.store.set_last_seen([state.device_id], mark_online=True)
             await self.store.delete_state(state.id)
+            self._sent += 1
             _finalize("success" if not self._dry_run else "dry_run")
         else:
+            self._failed += 1
             await self.store.record_send_failure(
                 state.device_id, payload_hash, self.config.device_offline_threshold
             )
@@ -302,6 +431,19 @@ class DeviceSenderService:
         attempts = max(1, self.config.device_send_retries)
         delays = self._backoff.iter_delays(attempts)
         for attempt in range(1, attempts + 1):
+            self.logger.debug(
+                "Sender attempting delivery",
+                extra={
+                    "device_id": target.id,
+                    "device_ip": target.ip,
+                    "protocol": target.protocol,
+                    "transport": target.transport,
+                    "destination_port": target.port,
+                    "attempt": attempt,
+                    "max_attempts": attempts,
+                    "context_id": context_id,
+                },
+            )
             if await self._send_once(target, payload, context_id):
                 return True
             if attempt == attempts:
@@ -330,24 +472,40 @@ class DeviceSenderService:
     async def _send_udp(
         self, target: DeviceTarget, payload: bytes, context_id: Optional[str]
     ) -> bool:
-        def _send() -> bool:
+        def _send() -> int:
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                     sock.settimeout(self.config.device_send_timeout)
                     sent = sock.sendto(payload, (target.ip, target.port))
-                return sent == len(payload)
+                return sent
             except OSError as exc:
                 self.logger.warning(
                     "UDP send failed",
                     exc_info=(type(exc), exc, exc.__traceback__),
                     extra={"device_id": target.id, "context_id": context_id},
                 )
-                return False
+                return 0
 
         try:
-            return await asyncio.wait_for(
+            self.logger.debug("UDP command about to be sent", extra={"device_id": target.id, "device_ip": target.ip, "protocol": target.protocol, "destination_port": target.port, "bytes": len(payload), "payload": payload.decode("utf-8", errors="replace"), "context_id": context_id})
+            sent = await asyncio.wait_for(
                 asyncio.to_thread(_send), timeout=self.config.device_send_timeout
             )
+            if sent == len(payload):
+                self.logger.debug("UDP send completed", extra={"device_id": target.id, "device_ip": target.ip, "destination_port": target.port, "bytes_sent": sent, "context_id": context_id})
+                return True
+            self.logger.warning(
+                "UDP send returned an incomplete byte count",
+                extra={
+                    "device_id": target.id,
+                    "device_ip": target.ip,
+                    "destination_port": target.port,
+                    "bytes_expected": len(payload),
+                    "bytes_sent": sent,
+                    "context_id": context_id,
+                },
+            )
+            return False
         except (asyncio.TimeoutError, OSError) as exc:
             self.logger.warning(
                 "UDP send timed out",

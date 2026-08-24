@@ -362,6 +362,7 @@ def create_app(
     reload_callback: Optional[Callable[[], Awaitable[None]]] = None,
     log_buffer: Optional[Any] = None,
     event_bus: Optional[Any] = None,
+    sender_provider: Optional[Callable[[], Any]] = None,
 ) -> FastAPI:
     """Create and configure a FastAPI application."""
 
@@ -441,8 +442,34 @@ def create_app(
 
     @app.get("/health", dependencies=[Depends(auth_dependency)])
     async def health_status() -> dict[str, Any]:
-        subsystems = await health.snapshot() if health else {}
+        subsystems = dict(await health.snapshot()) if health else {}
+        if sender_provider:
+            sender = sender_provider()
+            subsystems["sender"] = (
+                await sender.health_details()
+                if sender is not None
+                else {"status": "failed", "reason": "sender worker was never started"}
+            )
         return {"status": _overall_status(subsystems), "subsystems": subsystems}
+
+    async def _enqueue_command(update: DeviceStateUpdate) -> None:
+        """Queue through the live sender when application wiring supplies one."""
+        try:
+            if sender_provider is None:
+                raise RuntimeError("sender service was not wired into the API")
+            sender = sender_provider()
+            if sender is None:
+                raise RuntimeError("sender service is unavailable")
+            await sender.enqueue(update)
+        except Exception as exc:
+            logger.exception(
+                "Command queue insertion failed",
+                extra={"device_id": update.device_id, "context_id": update.context_id},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Sender queue unavailable",
+            ) from exc
 
     @app.get("/status", dependencies=[Depends(auth_dependency)])
     async def status_view() -> dict[str, Any]:
@@ -526,11 +553,13 @@ def create_app(
         try:
             sanitized, warnings = validate_command_payload(payload.payload, capabilities)
             update = DeviceStateUpdate(device_id=device_id, payload=sanitized)
-            await store.enqueue_state(update)
+            await _enqueue_command(update)
             response: dict[str, str] = {"status": "queued"}
             if warnings:
                 response["detail"] = "; ".join(warnings)
             return response
+        except HTTPException:
+            raise
         except Exception as exc:  # pragma: no cover - defensive
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -562,9 +591,13 @@ def create_app(
                 payloads.append(state_payload)
         if not payloads:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No actions to enqueue")
+        logger.debug(
+            "Command payload generated",
+            extra={"device_id": device_id, "protocol": device.protocol, "command_type": "manual", "payload": payloads},
+        )
         for entry in payloads:
             update = DeviceStateUpdate(device_id=device_id, payload=entry, context_id="command")
-            await store.enqueue_state(update)
+            await _enqueue_command(update)
         response: dict[str, Any] = {"status": "queued", "payloads": payloads}
         if warnings:
             response["detail"] = "; ".join(warnings)
@@ -923,6 +956,7 @@ class ApiService:
         reload_callback: Optional[Callable[[], Awaitable[None]]] = None,
         log_buffer: Optional[Any] = None,
         event_bus: Optional[Any] = None,
+        sender_provider: Optional[Callable[[], Any]] = None,
     ) -> None:
         self.config = config
         self.store = store
@@ -930,6 +964,7 @@ class ApiService:
         self._reload_callback = reload_callback
         self.log_buffer = log_buffer
         self.event_bus = event_bus
+        self.sender_provider = sender_provider
         self.logger = get_logger("artnet.api")
         self._server: Optional[uvicorn.Server] = None
         self._server_task: Optional[Any] = None
@@ -944,6 +979,7 @@ class ApiService:
             reload_callback=self._reload_callback,
             log_buffer=self.log_buffer,
             event_bus=self.event_bus,
+            sender_provider=self.sender_provider,
         )
         uvicorn_config = uvicorn.Config(
             app,

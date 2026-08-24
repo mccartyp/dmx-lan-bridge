@@ -2319,6 +2319,12 @@ class DeviceStore:
     async def pending_device_ids(self) -> List[str]:
         return await self.db.run(self._pending_device_ids)
 
+    async def pending_state_count(self) -> int:
+        """Return the exact number of commands awaiting delivery."""
+        return await self.db.run(
+            lambda conn: int(conn.execute("SELECT COUNT(*) FROM state").fetchone()[0])
+        )
+
     def _pending_device_ids(self, conn: sqlite3.Connection) -> List[str]:
         rows = conn.execute(
             """

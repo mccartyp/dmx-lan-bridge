@@ -10,6 +10,16 @@ from dmx_lan_bridge.db import apply_migrations
 from dmx_lan_bridge.devices import DeviceStore, DiscoveryResult
 
 
+class _ActiveStoreSender:
+    """Minimal active sender boundary for API-focused queue assertions."""
+
+    def __init__(self, store: DeviceStore) -> None:
+        self.store = store
+
+    async def enqueue(self, update) -> None:
+        await self.store.enqueue_state(update)
+
+
 def test_reload_endpoint_triggers_callback() -> None:
     calls: list[str] = []
 
@@ -231,7 +241,11 @@ async def test_command_endpoint_enqueues_sanitized_payload(tmp_path) -> None:
         )
     )
 
-    app = create_app(Config(), store=store, health=None, reload_callback=None)
+    sender = _ActiveStoreSender(store)
+    app = create_app(
+        Config(), store=store, health=None, reload_callback=None,
+        sender_provider=lambda: sender,
+    )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
@@ -283,7 +297,11 @@ async def test_command_endpoint_turn_only(tmp_path) -> None:
         )
     )
 
-    app = create_app(Config(), store=store, health=None, reload_callback=None)
+    sender = _ActiveStoreSender(store)
+    app = create_app(
+        Config(), store=store, health=None, reload_callback=None,
+        sender_provider=lambda: sender,
+    )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
@@ -297,3 +315,20 @@ async def test_command_endpoint_turn_only(tmp_path) -> None:
     payload = json.loads(state.payload)
     assert payload["msg"]["cmd"] == "turn"
     assert payload["msg"]["data"]["value"] == 0
+
+
+@pytest.mark.asyncio
+async def test_test_endpoint_preserves_sender_unavailable_status(tmp_path) -> None:
+    db_path = tmp_path / "bridge.sqlite3"
+    apply_migrations(db_path)
+    store = DeviceStore(db_path)
+    await store.create_manual_device(
+        ManualDevice(id="test-unavailable", ip="10.0.5.3", capabilities={"brightness": True})
+    )
+    app = create_app(Config(), store=store, sender_provider=lambda: None)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/devices/test-unavailable/test", json={"payload": {"brightness": 10}}
+        )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Sender queue unavailable"

@@ -79,7 +79,7 @@ deb: clean-deb
 	@chmod +x $(DEB_PKG_DIR)/usr/bin/dmx-lan-cli
 
 	@# Install systemd service
-	@cp packaging/systemd/dmx-bridge.service $(DEB_PKG_DIR)/lib/systemd/system/
+	@cp packaging/systemd/dmx-lan-bridge.service $(DEB_PKG_DIR)/lib/systemd/system/
 
 	@# Install config template as conffile
 	@cp packaging/config/dmx-bridge.toml $(DEB_PKG_DIR)/etc/dmx-bridge/config.toml

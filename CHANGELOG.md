@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Package renamed**: `govee-artnet-lan-bridge` → `dmx-lan-bridge` (reflects multi-protocol support)
 - **Primary commands**: `govee-artnet-bridge` → `dmx-lan-bridge`, `govee-artnet-cli` → `dmx-lan-cli`
 - **Configuration files**: `govee-bridge.toml` → `dmx-bridge.toml`
-- **Systemd services**: `govee-bridge.service` → `dmx-bridge.service`, `govee-bridge-user.service` → `dmx-bridge-user.service`
+- **Systemd services**: `govee-bridge.service` and `govee-bridge-user.service` → `dmx-lan-bridge.service` (in the system and user scopes)
 - **Capability catalogs**: Split into protocol-specific files (`capability_catalog_govee.json`, `capability_catalog_lifx.json`)
 
 #### Configuration Changes

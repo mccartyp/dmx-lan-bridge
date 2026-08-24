@@ -81,7 +81,7 @@ case "$1" in
         fi
 
         # Ensure systemd service file has correct ownership
-        for svc_path in /lib/systemd/system/dmx-bridge.service /usr/lib/systemd/system/dmx-bridge.service; do
+        for svc_path in /lib/systemd/system/dmx-lan-bridge.service /usr/lib/systemd/system/dmx-lan-bridge.service; do
             if [ -f "$svc_path" ]; then
                 chown root:root "$svc_path"
                 chmod 644 "$svc_path"
@@ -92,29 +92,29 @@ case "$1" in
         systemctl daemon-reload || true
 
         # Enable service (but don't start yet if this is initial install)
-        systemctl enable dmx-bridge.service || true
+        systemctl enable dmx-lan-bridge.service || true
 
         # On upgrade, restart the service if it was running
         # On fresh install, start the service
-        if systemctl is-active --quiet dmx-bridge.service; then
-            echo "Restarting dmx-bridge service..."
-            systemctl restart dmx-bridge.service || true
+        if systemctl is-active --quiet dmx-lan-bridge.service; then
+            echo "Restarting dmx-lan-bridge service..."
+            systemctl restart dmx-lan-bridge.service || true
         else
-            echo "Starting dmx-bridge service..."
-            systemctl start dmx-bridge.service || true
+            echo "Starting dmx-lan-bridge service..."
+            systemctl start dmx-lan-bridge.service || true
         fi
 
         echo ""
         echo "DMX LAN Bridge installed successfully!"
         echo ""
         echo "Service status:"
-        systemctl status dmx-bridge.service --no-pager -l || true
+        systemctl status dmx-lan-bridge.service --no-pager -l || true
         echo ""
         echo "Configuration: /etc/dmx-bridge/config.toml"
         echo "Documentation: /usr/share/doc/dmx-lan-bridge/"
         echo ""
-        echo "Check service logs: sudo journalctl -u dmx-bridge.service -f"
-        echo "Restart service: sudo systemctl restart dmx-bridge.service"
+        echo "Check service logs: sudo journalctl -u dmx-lan-bridge.service -f"
+        echo "Restart service: sudo systemctl restart dmx-lan-bridge.service"
         echo ""
         ;;
 esac

@@ -4,9 +4,9 @@ set -e
 case "$1" in
     remove|upgrade|deconfigure)
         # Stop the service before removal or upgrade
-        if systemctl is-active --quiet dmx-bridge.service; then
-            echo "Stopping dmx-bridge service..."
-            systemctl stop dmx-bridge.service || true
+        if systemctl is-active --quiet dmx-lan-bridge.service; then
+            echo "Stopping dmx-lan-bridge service..."
+            systemctl stop dmx-lan-bridge.service || true
         fi
         ;;
 

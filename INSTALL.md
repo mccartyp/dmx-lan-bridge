@@ -52,10 +52,10 @@ The service is automatically started after installation:
 
 ```bash
 # Check service status
-sudo systemctl status dmx-bridge.service
+sudo systemctl status dmx-lan-bridge.service
 
 # View service logs
-sudo journalctl -u dmx-bridge.service -f
+sudo journalctl -u dmx-lan-bridge.service -f
 ```
 
 ### 4. Configure (Optional)
@@ -69,7 +69,7 @@ sudo nano /etc/dmx-bridge/dmx-bridge.toml
 After making changes, reload the configuration:
 
 ```bash
-sudo systemctl reload dmx-bridge.service
+sudo systemctl reload dmx-lan-bridge.service
 ```
 
 For detailed configuration options, see:
@@ -79,7 +79,7 @@ For detailed configuration options, see:
 
 - **Binaries**: `/usr/bin/dmx-lan-bridge`, `/usr/bin/dmx-lan-cli`
 - **Python Package**: `/usr/lib/python3/dist-packages/dmx_lan_bridge/`
-- **Systemd Service**: `/lib/systemd/system/dmx-bridge.service`
+- **Systemd Service**: `/lib/systemd/system/dmx-lan-bridge.service`
 - **Configuration**: `/etc/dmx-bridge/dmx-bridge.toml`
 - **Data Directory**: `/var/lib/dmx-bridge/`
 - **Documentation**: `/usr/share/doc/dmx-lan-bridge/`
@@ -143,16 +143,16 @@ The installer will:
 
 ```bash
 # Check status
-sudo systemctl status dmx-bridge.service
+sudo systemctl status dmx-lan-bridge.service
 
 # Restart service
-sudo systemctl restart dmx-bridge.service
+sudo systemctl restart dmx-lan-bridge.service
 
 # View logs
-sudo journalctl -u dmx-bridge.service -f
+sudo journalctl -u dmx-lan-bridge.service -f
 
 # Reload configuration
-sudo systemctl reload dmx-bridge.service
+sudo systemctl reload dmx-lan-bridge.service
 ```
 
 ### Uninstall
@@ -182,19 +182,19 @@ make install-user
 
 - **Config**: `~/.config/dmx-bridge/dmx-bridge.toml`
 - **Data**: `~/.local/share/dmx-lan-bridge/`
-- **Service**: `~/.config/systemd/user/dmx-bridge-user.service`
+- **Service**: `~/.config/systemd/user/dmx-lan-bridge.service`
 
 ### Service Management
 
 ```bash
 # Check status
-systemctl --user status dmx-bridge-user.service
+systemctl --user status dmx-lan-bridge.service
 
 # Restart
-systemctl --user restart dmx-bridge-user.service
+systemctl --user restart dmx-lan-bridge.service
 
 # View logs
-journalctl --user -u dmx-bridge-user.service -f
+journalctl --user -u dmx-lan-bridge.service -f
 ```
 
 ### Start at Boot
@@ -298,7 +298,7 @@ firefox http://localhost:8000/docs
 Devices are automatically discovered via multicast. Check logs to see discovered devices:
 
 ```bash
-sudo journalctl -u dmx-bridge.service | grep discovered
+sudo journalctl -u dmx-lan-bridge.service | grep discovered
 ```
 
 ### Configuration Examples
@@ -311,7 +311,7 @@ See `/usr/share/doc/dmx-lan-bridge/dmx-bridge.toml.example` for comprehensive co
 
 After installation:
 
-1. **Verify service is running**: `sudo systemctl status dmx-bridge.service`
+1. **Verify service is running**: `sudo systemctl status dmx-lan-bridge.service`
 2. **Check devices are discovered**: `dmx-lan-cli devices list` or check API
 3. **Configure DMX mapping**: See main [README.md](README.md) for usage
 4. **Set up authentication**: Edit `/etc/dmx-bridge/dmx-bridge.toml` to add `api_key`
